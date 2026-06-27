@@ -4,7 +4,21 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"slices"
+	"strings"
 )
+
+type parameters struct {
+	Body string `json:"body"`
+}
+
+type errReturn struct {
+	Error string `json:"error"`
+}
+
+type validReturn struct {
+	CleanedBody string `json:"cleaned_body"`
+}
 
 func servHealth(write http.ResponseWriter, request *http.Request) {
 	write.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -13,18 +27,6 @@ func servHealth(write http.ResponseWriter, request *http.Request) {
 }
 
 func chirpValidate(write http.ResponseWriter, request *http.Request) {
-	type parameters struct {
-		Body string `json:"body"`
-	}
-
-	type errReturn struct {
-		Error string `json:"error"`
-	}
-
-	type validReturn struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
-
 	decoder := json.NewDecoder(request.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
@@ -59,10 +61,10 @@ func chirpValidate(write http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	to_clean := params.Body
+	cleaned_body := removeProfanity(params.Body)
 
 	respBody := validReturn{
-		CleanedBody: to_clean,
+		CleanedBody: cleaned_body,
 	}
 	dat, err := json.Marshal(respBody)
 	if err != nil {
@@ -73,4 +75,16 @@ func chirpValidate(write http.ResponseWriter, request *http.Request) {
 	write.Header().Set("Content-Type", "application/json")
 	write.WriteHeader(200)
 	write.Write(dat)
+}
+
+func removeProfanity(chirp string) string {
+	profane_words := []string{"kerfuffle", "sharbert", "fornax"}
+	split_str := strings.Split(chirp, " ")
+	for idx, word := range split_str {
+		if slices.Contains(profane_words, strings.ToLower(word)) {
+			split_str[idx] = "****"
+		}
+	}
+	cleaned_string := strings.Join(split_str, " ")
+	return cleaned_string
 }
