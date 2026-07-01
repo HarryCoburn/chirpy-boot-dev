@@ -36,7 +36,7 @@ func main() {
 
 	servMux := http.NewServeMux()
 	servMux.HandleFunc("GET /api/healthz/", servHealth)
-	servMux.HandleFunc("POST /api/validate_chirp", chirpValidate)
+	servMux.HandleFunc("POST /api/chirps", apiCfg.chirpHandler)
 	servMux.HandleFunc("GET /admin/metrics/", apiCfg.servMetrics)
 	servMux.HandleFunc("POST /admin/reset/", apiCfg.resetMetrics)
 	servMux.HandleFunc("POST /api/users", apiCfg.createNewUser)
