@@ -158,12 +158,13 @@ func (cfg *apiConfig) chirpHandler(write http.ResponseWriter, request *http.Requ
 
 	postChirpReturn, err := cfg.dbQueries.PostChirp(request.Context(), postParams)
 
-	chirpResponse := chirpPostValid{}
-	chirpResponse.ID = postChirpReturn.ID
-	chirpResponse.CreatedAt = postChirpReturn.CreatedAt
-	chirpResponse.UpdatedAt = postChirpReturn.UpdatedAt
-	chirpResponse.Body = postChirpReturn.Body
-	chirpResponse.UserID = postChirpReturn.UserID
+	chirpResponse := chirpPostValid{
+		ID:        postChirpReturn.ID,
+		CreatedAt: postChirpReturn.CreatedAt,
+		UpdatedAt: postChirpReturn.UpdatedAt,
+		Body:      postChirpReturn.Body,
+		UserID:    postChirpReturn.UserID,
+	}
 
 	dat, err := json.Marshal(chirpResponse)
 	write.Header().Set("Content-Type", "application/json")
