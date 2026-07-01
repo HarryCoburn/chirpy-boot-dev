@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
 )
 
 func (cfg *apiConfig) servMetrics(write http.ResponseWriter, request *http.Request) {
@@ -19,10 +20,17 @@ func (cfg *apiConfig) servMetrics(write http.ResponseWriter, request *http.Reque
 }
 
 func (cfg *apiConfig) resetMetrics(write http.ResponseWriter, request *http.Request) {
+	platform := os.Getenv("PLATFORM")
+	if platform != "dev" {
+		write.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		write.WriteHeader(http.StatusForbidden)
+		return
+	}
 	write.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	write.WriteHeader(http.StatusOK)
 	cfg.fileserverHits.Store(0)
-	fmt.Fprintf(write, "Metrics reset")
+	cfg.dbQueries.DeleteUsers(request.Context())
+	fmt.Fprintf(write, "Metrics and Users reset")
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {

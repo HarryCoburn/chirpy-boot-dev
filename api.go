@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 type parameters struct {
@@ -18,6 +21,17 @@ type errReturn struct {
 
 type validReturn struct {
 	CleanedBody string `json:"cleaned_body"`
+}
+
+type newUser struct {
+	Email string `json:"email"`
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
 }
 
 func servHealth(write http.ResponseWriter, request *http.Request) {
@@ -87,4 +101,55 @@ func removeProfanity(chirp string) string {
 	}
 	cleaned_string := strings.Join(split_str, " ")
 	return cleaned_string
+}
+
+func (cfg *apiConfig) createNewUser(write http.ResponseWriter, request *http.Request) {
+	decoder := json.NewDecoder(request.Body)
+	params := newUser{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respBody := errReturn{
+			Error: "Something went wrong creating a user",
+		}
+		dat, err := json.Marshal(respBody)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			write.WriteHeader(500)
+			return
+		}
+		write.Header().Set("Content-Type", "application/json")
+		write.WriteHeader(400)
+		write.Write(dat)
+		return
+	}
+
+	newUser, err := cfg.dbQueries.CreateUser(request.Context(), params.Email)
+	if err != nil {
+		respBody := errReturn{
+			Error: "Something went wrong creating a user",
+		}
+		dat, err := json.Marshal(respBody)
+		if err != nil {
+			log.Printf("Error marshalling JSON: %s", err)
+			write.WriteHeader(500)
+			return
+		}
+		write.Header().Set("Content-Type", "application/json")
+		write.WriteHeader(400)
+		write.Write(dat)
+		return
+	}
+
+	responseUser := User{
+		ID:        newUser.ID,
+		CreatedAt: newUser.CreatedAt,
+		UpdatedAt: newUser.UpdatedAt,
+		Email:     newUser.Email,
+	}
+
+	dat, err := json.Marshal(responseUser)
+
+	write.Header().Set("Content-Type", "application/json")
+	write.WriteHeader(201)
+	write.Write(dat)
 }
