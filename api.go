@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"slices"
 	"strings"
@@ -41,7 +40,7 @@ type chirpPost struct {
 	UserID uuid.UUID `json:"user_id"`
 }
 
-type chirpPostValid struct {
+type chirpResponse struct {
 	ID        uuid.UUID `json:"id"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -49,10 +48,8 @@ type chirpPostValid struct {
 	UserID    uuid.UUID `json:"user_id"`
 }
 
-func servHealth(write http.ResponseWriter, request *http.Request) {
-	write.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	write.WriteHeader(http.StatusOK)
-	write.Write([]byte("OK"))
+func servHealth(w http.ResponseWriter, r *http.Request) {
+	respondWith(w, http.StatusOK, contentTypePlain, "OK")
 }
 
 func removeProfanity(chirp string) string {
@@ -67,250 +64,125 @@ func removeProfanity(chirp string) string {
 	return cleaned_string
 }
 
-func (cfg *apiConfig) createNewUser(write http.ResponseWriter, request *http.Request) {
-	decoder := json.NewDecoder(request.Body)
+func (cfg *apiConfig) createNewUser(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
 	params := newUser{}
-	err := decoder.Decode(&params)
-	if err != nil {
-		respBody := errReturn{
-			Error: "Something went wrong creating a user",
-		}
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			write.WriteHeader(500)
-			return
-		}
-		write.Header().Set("Content-Type", "application/json")
-		write.WriteHeader(400)
-		write.Write(dat)
+	if err := decoder.Decode(&params); err != nil {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Error in createNewUser request: %s", err), "Something went wrong creating a user.")
 		return
 	}
 
 	hash, err := auth.HashPassword(params.Password)
 	if err != nil {
-		respBody := errReturn{
-			Error: "Something went wrong creating a user",
-		}
-		dat, _ := json.Marshal(respBody)
-		write.Header().Set("Content-Type", "application/json")
-		write.WriteHeader(400)
-		write.Write(dat)
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error in createNewUser request: %s", err), "Something went wrong hashing a password for a new user.")
 		return
 	}
 
-	params.Password = hash
-
-	newUser, err := cfg.dbQueries.CreateUser(request.Context(), database.CreateUserParams{
+	createdUser, err := cfg.dbQueries.CreateUser(r.Context(), database.CreateUserParams{
 		Email:          params.Email,
 		HashedPassword: hash,
 	})
 	if err != nil {
-		respBody := errReturn{
-			Error: "Something went wrong creating a user",
-		}
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			write.WriteHeader(500)
-			return
-		}
-		write.Header().Set("Content-Type", "application/json")
-		write.WriteHeader(400)
-		write.Write(dat)
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error in createNewUser request: %s", err), "Something went wrong with the create user query.")
 		return
 	}
 
 	responseUser := User{
-		ID:        newUser.ID,
-		CreatedAt: newUser.CreatedAt,
-		UpdatedAt: newUser.UpdatedAt,
-		Email:     newUser.Email,
+		ID:        createdUser.ID,
+		CreatedAt: createdUser.CreatedAt,
+		UpdatedAt: createdUser.UpdatedAt,
+		Email:     createdUser.Email,
 	}
 
-	dat, err := json.Marshal(responseUser)
-
-	write.Header().Set("Content-Type", "application/json")
-	write.WriteHeader(201)
-	write.Write(dat)
+	respondWithJSON(w, http.StatusCreated, responseUser)
 }
 
-func (cfg *apiConfig) chirpHandler(write http.ResponseWriter, request *http.Request) {
-	decoder := json.NewDecoder(request.Body)
+func (cfg *apiConfig) chirpHandler(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
 	params := chirpPost{}
-	err := decoder.Decode(&params)
-	if err != nil {
-		respBody := errReturn{
-			Error: "Something went wrong",
-		}
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			write.WriteHeader(500)
-			return
-		}
-		write.Header().Set("Content-Type", "application/json")
-		write.WriteHeader(400)
-		write.Write(dat)
+	if err := decoder.Decode(&params); err != nil {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Error in chirp request: %s", err), "Something went wrong creating a chirp.")
 		return
 	}
+
 	if len(params.Body) > 140 {
-		respBody := errReturn{
-			Error: "Chirp is too long",
-		}
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			write.WriteHeader(500)
-			return
-		}
-		write.Header().Set("Content-Type", "application/json")
-		write.WriteHeader(400)
-		write.Write(dat)
+		respondWithError(w, http.StatusBadRequest, "Chirp is too long", "Chirp is too long.")
 		return
 	}
 
-	var postParams database.PostChirpParams
-	postParams.Body = removeProfanity(params.Body)
-	postParams.UserID = params.UserID
+	chirp, err := cfg.dbQueries.PostChirp(r.Context(), database.PostChirpParams{
+		Body:   removeProfanity(params.Body),
+		UserID: params.UserID,
+	})
 
-	postChirpReturn, err := cfg.dbQueries.PostChirp(request.Context(), postParams)
-
-	chirpResponse := chirpPostValid{
-		ID:        postChirpReturn.ID,
-		CreatedAt: postChirpReturn.CreatedAt,
-		UpdatedAt: postChirpReturn.UpdatedAt,
-		Body:      postChirpReturn.Body,
-		UserID:    postChirpReturn.UserID,
-	}
-
-	dat, err := json.Marshal(chirpResponse)
-	write.Header().Set("Content-Type", "application/json")
-	write.WriteHeader(201)
-	write.Write(dat)
-
-}
-
-func (cfg *apiConfig) getChirpsHandler(write http.ResponseWriter, request *http.Request) {
-	chirpArray := []chirpPostValid{}
-	allChirps, err := cfg.dbQueries.GetAllChirps(request.Context())
 	if err != nil {
-		fmt.Println("Could not retreive all chirps.")
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Error in adding chirp to the database: %s", err), "Something went wrong creating a chirp.")
 		return
 	}
-	for _, chirp := range allChirps {
-		chirpResponse := chirpPostValid{
-			ID:        chirp.ID,
-			CreatedAt: chirp.CreatedAt,
-			UpdatedAt: chirp.UpdatedAt,
-			Body:      chirp.Body,
-			UserID:    chirp.UserID,
-		}
-		chirpArray = append(chirpArray, chirpResponse)
-	}
-	dat, err := json.Marshal(chirpArray)
-	write.Header().Set("Content-Type", "application/json")
-	write.WriteHeader(200)
-	write.Write(dat)
+
+	respondWithJSON(w, http.StatusCreated, toChirpResponse(chirp))
 }
 
-func (cfg *apiConfig) getChirpHandler(write http.ResponseWriter, request *http.Request) {
-	chirpIDStr := request.PathValue("chirpID")
+func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	allChirps, err := cfg.dbQueries.GetAllChirps(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Could not retrieve chirps: %s", err), "Something went wrong retrieving chirps.")
+		return
+	}
+
+	chirpResponses := []chirpResponse{}
+	for _, chirp := range allChirps {
+		chirpResponses = append(chirpResponses, toChirpResponse(chirp))
+	}
+	respondWithJSON(w, http.StatusOK, chirpResponses)
+}
+
+func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
+	chirpIDStr := r.PathValue("chirpID")
 	chirpUUID, err := uuid.Parse(chirpIDStr)
 	if err != nil {
-		log.Fatalf("failed to parse UUID string: %v", err)
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Could not parse chirpID: %s", err), "Something went wrong retreiving chirp.")
+		return
 	}
-	chirp, err := cfg.dbQueries.GetChirp(request.Context(), chirpUUID)
+
+	chirp, err := cfg.dbQueries.GetChirp(r.Context(), chirpUUID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			write.Header().Set("Content-Type", "application/json")
-			write.WriteHeader(404)
-			fmt.Println("Could not find this chirp")
+			respondWithError(w, http.StatusNotFound, "Could not find this chirp.", "Could not find this chirp.")
 			return
 		}
-		fmt.Println("Query in getChirpHandler failed.")
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Query in getChirpHandler failed: %s", err), "Query in getChirpHandler failed.")
 		return
-
 	}
 
-	chirpResponse := chirpPostValid{
-		ID:        chirp.ID,
-		CreatedAt: chirp.CreatedAt,
-		UpdatedAt: chirp.UpdatedAt,
-		Body:      chirp.Body,
-		UserID:    chirp.UserID,
-	}
-	dat, err := json.Marshal(chirpResponse)
-	write.Header().Set("Content-Type", "application/json")
-	write.WriteHeader(200)
-	write.Write(dat)
+	respondWithJSON(w, http.StatusOK, toChirpResponse(chirp))
 }
 
-func (cfg *apiConfig) userLogin(write http.ResponseWriter, request *http.Request) {
-	decoder := json.NewDecoder(request.Body)
+func (cfg *apiConfig) userLogin(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
 	params := newUser{}
-	err := decoder.Decode(&params)
+	if err := decoder.Decode(&params); err != nil {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Error in user login: %s", err), "Something went wrong logging in.")
+		return
+	}
+
+	dbUser, err := cfg.dbQueries.GetUserFromEmail(r.Context(), params.Email)
 	if err != nil {
-		respBody := errReturn{
-			Error: "Something went wrong",
-		}
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			write.WriteHeader(500)
-			return
-		}
-		write.Header().Set("Content-Type", "application/json")
-		write.WriteHeader(400)
-		write.Write(dat)
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Unknown user: %s", err), "Bad username or password")
 		return
 	}
 
-	user, err := cfg.dbQueries.GetUserFromEmail(request.Context(), params.Email)
-	if err != nil {
-		respBody := errReturn{
-			Error: "Incorrect email or password",
-		}
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			write.WriteHeader(500)
-			return
-		}
-		write.Header().Set("Content-Type", "application/json")
-		write.WriteHeader(401)
-		write.Write(dat)
+	validPassword, err := auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
+	if err != nil || !validPassword {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Bad username or password: %s", err), "Bad username or password")
 		return
 	}
 
-	did_auth, err := auth.CheckPasswordHash(params.Password, user.HashedPassword)
-	if err != nil || did_auth == false {
-		respBody := errReturn{
-			Error: "Incorrect email or password",
-		}
-		dat, err := json.Marshal(respBody)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			write.WriteHeader(500)
-			return
-		}
-		write.Header().Set("Content-Type", "application/json")
-		write.WriteHeader(401)
-		write.Write(dat)
-		return
-	}
-
-	responseUser := User{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
-	}
-
-	dat, err := json.Marshal(responseUser)
-
-	write.Header().Set("Content-Type", "application/json")
-	write.WriteHeader(200)
-	write.Write(dat)
+	respondWithJSON(w, http.StatusOK, User{
+		ID:        dbUser.ID,
+		CreatedAt: dbUser.CreatedAt,
+		UpdatedAt: dbUser.UpdatedAt,
+		Email:     dbUser.Email,
+	})
 
 }
