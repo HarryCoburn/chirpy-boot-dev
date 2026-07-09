@@ -15,12 +15,14 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries      *database.Queries
+	secret         string
 }
 
 func main() {
 	// env handling
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
+	secret := os.Getenv("SEC")
 
 	// Open database
 	db, err := sql.Open("postgres", dbURL)
@@ -31,7 +33,10 @@ func main() {
 
 	dbQueries := database.New(db)
 
-	apiCfg := apiConfig{dbQueries: dbQueries}
+	apiCfg := apiConfig{
+		dbQueries: dbQueries,
+		secret:    secret,
+	}
 
 	servMux := http.NewServeMux()
 	servMux.HandleFunc("GET /api/healthz/", servHealth)

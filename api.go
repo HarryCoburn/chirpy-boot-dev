@@ -24,8 +24,9 @@ type errReturn struct {
 }
 
 type newUser struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email            string `json:"email"`
+	Password         string `json:"password"`
+	ExpiresInSeconds int    `json:"expires_in_seconds"`
 }
 
 type User struct {
@@ -33,6 +34,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 type chirpPost struct {
@@ -98,6 +100,19 @@ func (cfg *apiConfig) createNewUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) chirpHandler(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Could not get bearer token: %s", err), "Unauthorized access")
+		return
+	}
+
+	tokenUUID, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Could not validate bearer token: %s", err), "Unauthorized access")
+		return
+	}
+
+	// Request validation
 	decoder := json.NewDecoder(r.Body)
 	params := chirpPost{}
 	if err := decoder.Decode(&params); err != nil {
@@ -112,7 +127,7 @@ func (cfg *apiConfig) chirpHandler(w http.ResponseWriter, r *http.Request) {
 
 	chirp, err := cfg.dbQueries.PostChirp(r.Context(), database.PostChirpParams{
 		Body:   removeProfanity(params.Body),
-		UserID: params.UserID,
+		UserID: tokenUUID,
 	})
 
 	if err != nil {
@@ -159,6 +174,7 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) userLogin(w http.ResponseWriter, r *http.Request) {
+	// Check request for problems
 	decoder := json.NewDecoder(r.Body)
 	params := newUser{}
 	if err := decoder.Decode(&params); err != nil {
@@ -166,15 +182,33 @@ func (cfg *apiConfig) userLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check for user through the given email
 	dbUser, err := cfg.dbQueries.GetUserFromEmail(r.Context(), params.Email)
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Unknown user: %s", err), "Bad username or password")
 		return
 	}
 
+	// Check that user's password
 	validPassword, err := auth.CheckPasswordHash(params.Password, dbUser.HashedPassword)
 	if err != nil || !validPassword {
 		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Bad username or password: %s", err), "Bad username or password")
+		return
+	}
+
+	// All good, create bearer token
+	const defaultExpiration = time.Hour // 1 hour default expiration time
+	expiresIn := defaultExpiration
+	if params.ExpiresInSeconds != 0 {
+		requested := time.Duration(params.ExpiresInSeconds) * time.Second
+		if requested < defaultExpiration {
+			expiresIn = requested
+		}
+	}
+
+	jwt, err := auth.MakeJWT(dbUser.ID, cfg.secret, time.Duration(expiresIn))
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Unable to make JWT token: %s", err), "Server Error")
 		return
 	}
 
@@ -183,6 +217,7 @@ func (cfg *apiConfig) userLogin(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: dbUser.CreatedAt,
 		UpdatedAt: dbUser.UpdatedAt,
 		Email:     dbUser.Email,
+		Token:     jwt,
 	})
 
 }
