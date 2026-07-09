@@ -25,26 +25,31 @@ func main() {
 	// Open database
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
-		log.Printf("Cannot open databse: %v", err)
+		log.Fatalf("Cannot open database: %v", err)
 		return
 	}
 
 	dbQueries := database.New(db)
 
-	apiCfg := apiConfig{}
-	apiCfg.dbQueries = dbQueries
+	apiCfg := apiConfig{dbQueries: dbQueries}
 
 	servMux := http.NewServeMux()
 	servMux.HandleFunc("GET /api/healthz/", servHealth)
 	servMux.HandleFunc("POST /api/chirps", apiCfg.chirpHandler)
+	servMux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
+	servMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirpHandler)
 	servMux.HandleFunc("GET /admin/metrics/", apiCfg.servMetrics)
 	servMux.HandleFunc("POST /admin/reset/", apiCfg.resetMetrics)
 	servMux.HandleFunc("POST /api/users", apiCfg.createNewUser)
+	servMux.HandleFunc("POST /api/login", apiCfg.userLogin)
 
 	fileServ := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
 	servMux.Handle("/app/", apiCfg.middlewareMetricsInc(fileServ))
-	var server http.Server
-	server.Handler = servMux
-	server.Addr = ":8080"
-	server.ListenAndServe()
+
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: servMux,
+	}
+
+	log.Fatal(server.ListenAndServe())
 }

@@ -6,31 +6,30 @@ import (
 	"os"
 )
 
-func (cfg *apiConfig) servMetrics(write http.ResponseWriter, request *http.Request) {
-	write.Header().Set("Content-Type", "text/html; charset=utf-8")
-	write.WriteHeader(http.StatusOK)
-	metricsPage := fmt.Sprintf(`<html>
+func (cfg *apiConfig) servMetrics(w http.ResponseWriter, r *http.Request) {
+	page := fmt.Sprintf(`<html>
   <body>
     <h1>Welcome, Chirpy Admin</h1>
     <p>Chirpy has been visited %d times!</p>
   </body>
 </html>
 `, cfg.fileserverHits.Load())
-	fmt.Fprint(write, metricsPage)
+	respondWith(w, http.StatusOK, contentTypeHTML, page)
 }
 
-func (cfg *apiConfig) resetMetrics(write http.ResponseWriter, request *http.Request) {
-	platform := os.Getenv("PLATFORM")
-	if platform != "dev" {
-		write.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		write.WriteHeader(http.StatusForbidden)
+func (cfg *apiConfig) resetMetrics(w http.ResponseWriter, r *http.Request) {
+	if os.Getenv("PLATFORM") != "dev" {
+		respondWith(w, http.StatusForbidden, contentTypePlain, "")
 		return
 	}
-	write.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	write.WriteHeader(http.StatusOK)
+
 	cfg.fileserverHits.Store(0)
-	cfg.dbQueries.DeleteUsers(request.Context())
-	fmt.Fprintf(write, "Metrics and Users reset")
+	if err := cfg.dbQueries.DeleteUsers(r.Context()); err != nil {
+		respondWith(w, http.StatusInternalServerError, contentTypePlain, "Could not reset users")
+		return
+	}
+
+	respondWith(w, http.StatusOK, contentTypePlain, "Metrics and Users Reset")
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
