@@ -24,17 +24,17 @@ type errReturn struct {
 }
 
 type newUser struct {
-	Email            string `json:"email"`
-	Password         string `json:"password"`
-	ExpiresInSeconds int    `json:"expires_in_seconds"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
-	Token     string    `json:"token"`
+	ID           uuid.UUID `json:"id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	Email        string    `json:"email"`
+	Token        string    `json:"token"`
+	RefreshToken string    `json:"refresh_token"`
 }
 
 type chirpPost struct {
@@ -48,6 +48,10 @@ type chirpResponse struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Body      string    `json:"body"`
 	UserID    uuid.UUID `json:"user_id"`
+}
+
+type tokenResponse struct {
+	Token string `json:"token"`
 }
 
 func servHealth(w http.ResponseWriter, r *http.Request) {
@@ -197,27 +201,88 @@ func (cfg *apiConfig) userLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// All good, create bearer token
-	const defaultExpiration = time.Hour // 1 hour default expiration time
-	expiresIn := defaultExpiration
-	if params.ExpiresInSeconds != 0 {
-		requested := time.Duration(params.ExpiresInSeconds) * time.Second
-		if requested < defaultExpiration {
-			expiresIn = requested
-		}
-	}
 
-	jwt, err := auth.MakeJWT(dbUser.ID, cfg.secret, time.Duration(expiresIn))
+	jwt, err := auth.MakeJWT(dbUser.ID, cfg.secret, time.Hour)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Unable to make JWT token: %s", err), "Server Error")
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, User{
-		ID:        dbUser.ID,
+	// Create refresh token
+	refreshToken := auth.MakeRefreshToken()
+
+	cfg.dbQueries.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		Token:     refreshToken,
 		CreatedAt: dbUser.CreatedAt,
 		UpdatedAt: dbUser.UpdatedAt,
-		Email:     dbUser.Email,
-		Token:     jwt,
+		UserID:    dbUser.ID,
 	})
 
+	respondWithJSON(w, http.StatusOK, User{
+		ID:           dbUser.ID,
+		CreatedAt:    dbUser.CreatedAt,
+		UpdatedAt:    dbUser.UpdatedAt,
+		Email:        dbUser.Email,
+		Token:        jwt,
+		RefreshToken: refreshToken,
+	})
+}
+
+func (cfg *apiConfig) refreshHandler(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("No authorization token found: %s", err), "Bad username or password")
+		return
+	}
+
+	tokenDb, err := cfg.dbQueries.GetRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, http.StatusUnauthorized, "invalid refresh token", "Bad username or password - No rows")
+			return
+		}
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("database error: %s", err), "Something went wrong")
+		return
+	}
+
+	if time.Now().UTC().After(tokenDb.ExpiresAt.UTC()) {
+		respondWithError(w, http.StatusUnauthorized, "refresh token expired", "Bad username or password - expired")
+		return
+	}
+	if tokenDb.RevokedAt.Valid {
+		respondWithError(w, http.StatusUnauthorized, "refresh token revoked", "Bad username or password - revoked")
+		return
+	}
+
+	// We're good. Make a new bearer token and update the user.
+	jwt, err := auth.MakeJWT(tokenDb.UserID, cfg.secret, time.Hour)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Unable to make JWT token: %s", err), "Server Error")
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, tokenResponse{
+		Token: jwt,
+	})
+}
+
+func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("No authorization token found: %s", err), "Bad username or password")
+		return
+	}
+
+	tokenDb, err := cfg.dbQueries.GetRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, http.StatusUnauthorized, "invalid refresh token", "Bad username or password")
+			return
+		}
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("database error: %s", err), "Something went wrong")
+		return
+	}
+
+	cfg.dbQueries.RevokeToken(r.Context(), tokenDb.Token)
+	respondWith(w, 204, contentTypePlain, "")
 }
