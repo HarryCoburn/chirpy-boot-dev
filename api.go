@@ -286,3 +286,43 @@ func (cfg *apiConfig) revokeHandler(w http.ResponseWriter, r *http.Request) {
 	cfg.dbQueries.RevokeToken(r.Context(), tokenDb.Token)
 	respondWith(w, 204, contentTypePlain, "")
 }
+
+func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	params := newUser{}
+	if err := decoder.Decode(&params); err != nil {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Error in user update: %s", err), "Something went wrong logging in.")
+		return
+	}
+
+	// Get the token from the header
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("No authorization token found: %s", err), "Bad username or password")
+		return
+	}
+
+	// Validate the token
+	userID, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Could not validate bearer token: %s", err), "Unauthorized access")
+		return
+	}
+
+	// Get the full user from the userID
+	userDb, err := cfg.dbQueries.GetUserFromID(r.Context(), userID)
+
+	newPass, err := auth.HashPassword(params.Password)
+	newUser, err := cfg.dbQueries.UpdateUserEmailPw(r.Context(), database.UpdateUserEmailPwParams{
+		ID:             userDb.ID,
+		Email:          params.Email,
+		HashedPassword: newPass,
+	})
+
+	respondWithJSON(w, http.StatusOK, User{
+		ID:        newUser.ID,
+		CreatedAt: newUser.CreatedAt,
+		UpdatedAt: newUser.UpdatedAt,
+		Email:     newUser.Email,
+	})
+}

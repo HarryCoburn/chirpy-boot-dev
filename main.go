@@ -49,6 +49,7 @@ func main() {
 	servMux.HandleFunc("POST /api/login", apiCfg.userLogin)
 	servMux.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
 	servMux.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
+	servMux.HandleFunc("PUT /api/users", apiCfg.updateUserHandler)
 
 	fileServ := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
 	servMux.Handle("/app/", apiCfg.middlewareMetricsInc(fileServ))
