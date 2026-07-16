@@ -13,6 +13,15 @@ import (
 	"github.com/google/uuid"
 )
 
+func GetAPIKey(headers http.Header) (string, error) {
+	authHeader := headers.Get("Authorization")
+
+	if authHeader == "" || !strings.HasPrefix(authHeader, "ApiKey ") {
+		return "", fmt.Errorf("No API key.")
+	}
+	return strings.TrimPrefix(authHeader, "ApiKey "), nil
+}
+
 func HashPassword(password string) (string, error) {
 	hash, err := argon2id.CreateHash(password, argon2id.DefaultParams)
 	if err != nil {

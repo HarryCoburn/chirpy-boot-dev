@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -35,6 +36,7 @@ type User struct {
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 type chirpPost struct {
@@ -52,6 +54,13 @@ type chirpResponse struct {
 
 type tokenResponse struct {
 	Token string `json:"token"`
+}
+
+type polkaWebhook struct {
+	Event string `json:"event"`
+	Data  struct {
+		UserID string `json:"user_id"`
+	} `json:"data"`
 }
 
 func servHealth(w http.ResponseWriter, r *http.Request) {
@@ -94,10 +103,11 @@ func (cfg *apiConfig) createNewUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responseUser := User{
-		ID:        createdUser.ID,
-		CreatedAt: createdUser.CreatedAt,
-		UpdatedAt: createdUser.UpdatedAt,
-		Email:     createdUser.Email,
+		ID:          createdUser.ID,
+		CreatedAt:   createdUser.CreatedAt,
+		UpdatedAt:   createdUser.UpdatedAt,
+		Email:       createdUser.Email,
+		IsChirpyRed: createdUser.IsChirpyRed,
 	}
 
 	respondWithJSON(w, http.StatusCreated, responseUser)
@@ -225,6 +235,7 @@ func (cfg *apiConfig) userLogin(w http.ResponseWriter, r *http.Request) {
 		Email:        dbUser.Email,
 		Token:        jwt,
 		RefreshToken: refreshToken,
+		IsChirpyRed:  dbUser.IsChirpyRed,
 	})
 }
 
@@ -369,4 +380,39 @@ func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, r *http.Request)
 	// Proceed with deletion
 	cfg.dbQueries.DeleteChirp(r.Context(), chirp.ID)
 	respondWith(w, 204, contentTypePlain, "")
+}
+
+func (cfg *apiConfig) polkaWebhookHandler(w http.ResponseWriter, r *http.Request) {
+	// API key matches?
+	actualKey := os.Getenv("POLKA_KEY")
+	key, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		respondWithError(w, 401, "No API key in header", "Something Went Wrong.")
+	}
+	if actualKey != key {
+		respondWithError(w, 401, "API keys do not match", "Something went wrong.")
+	}
+
+	// Unpack
+	decoder := json.NewDecoder(r.Body)
+	params := polkaWebhook{}
+	if err := decoder.Decode(&params); err != nil {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Error in polka webhook: %s", err), "Something went wrong logging in.")
+		return
+	}
+
+	// Is it an upgrade request?
+	if params.Event != "user.upgraded" {
+		respondWith(w, 204, contentTypePlain, "")
+		return
+	}
+
+	userUUID, _ := uuid.Parse(params.Data.UserID)
+	_, err = cfg.dbQueries.GetUserFromID(r.Context(), userUUID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, fmt.Sprintf("Could not upgrade user to chirpy red: %s", err), "")
+		return
+	}
+	cfg.dbQueries.UpgradeUserChirpyRed(r.Context(), userUUID)
+	respondWith(w, 204, fmt.Sprintf("User %s upgraded", userUUID), "")
 }
