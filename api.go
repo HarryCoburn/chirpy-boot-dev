@@ -326,3 +326,47 @@ func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, r *http.Request) 
 		Email:     newUser.Email,
 	})
 }
+
+func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, r *http.Request) {
+	// Get the token from the header
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("No authorization token found: %s", err), "Bad username or password")
+		return
+	}
+
+	// Validate the token
+	userID, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Could not validate bearer token: %s", err), "Unauthorized access")
+		return
+	}
+
+	// Get the chirp asked for
+	chirpIDStr := r.PathValue("chirpID")
+	chirpUUID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Could not parse chirpID: %s", err), "Something went wrong retreiving chirp.")
+		return
+	}
+
+	chirp, err := cfg.dbQueries.GetChirp(r.Context(), chirpUUID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			respondWithError(w, http.StatusNotFound, "Could not find this chirp.", "Could not find this chirp.")
+			return
+		}
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Query in getChirpHandler failed: %s", err), "Query in getChirpHandler failed.")
+		return
+	}
+
+	// Is this a chirp the user made?
+	if chirp.UserID != userID {
+		respondWithError(w, 403, fmt.Sprintf("User does not own this chirp: %s", err), "Unauthorized access")
+		return
+	}
+
+	// Proceed with deletion
+	cfg.dbQueries.DeleteChirp(r.Context(), chirp.ID)
+	respondWith(w, 204, contentTypePlain, "")
+}
