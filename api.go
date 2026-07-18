@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -153,17 +154,46 @@ func (cfg *apiConfig) chirpHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, r *http.Request) {
-	allChirps, err := cfg.dbQueries.GetAllChirps(r.Context())
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Could not retrieve chirps: %s", err), "Something went wrong retrieving chirps.")
+	author_id := r.URL.Query().Get("author_id")
+	sort_order := r.URL.Query().Get("sort")
+	if author_id == "" {
+		allChirps, err := cfg.dbQueries.GetAllChirps(r.Context())
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Could not retrieve chirps: %s", err), "Something went wrong retrieving chirps.")
+			return
+		}
+
+		chirpResponses := []chirpResponse{}
+		for _, chirp := range allChirps {
+			chirpResponses = append(chirpResponses, toChirpResponse(chirp))
+		}
+		if sort_order == "desc" {
+			sort.Slice(chirpResponses, func(i, j int) bool {
+				return chirpResponses[i].CreatedAt.After(chirpResponses[j].CreatedAt)
+			})
+		}
+		respondWithJSON(w, http.StatusOK, chirpResponses)
+		return
+	} else {
+		uuidParsed, err := uuid.Parse(author_id)
+		// Add verification that the user exists?
+		authorChirps, err := cfg.dbQueries.GetChirpsByAuthor(r.Context(), uuidParsed)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Could not retrieve chirps: %s", err), "Something went wrong retrieving chirps.")
+			return
+		}
+		chirpResponses := []chirpResponse{}
+		for _, chirp := range authorChirps {
+			chirpResponses = append(chirpResponses, toChirpResponse(chirp))
+		}
+		if sort_order == "desc" {
+			sort.Slice(chirpResponses, func(i, j int) bool {
+				return chirpResponses[i].CreatedAt.After(chirpResponses[j].CreatedAt)
+			})
+		}
+		respondWithJSON(w, http.StatusOK, chirpResponses)
 		return
 	}
-
-	chirpResponses := []chirpResponse{}
-	for _, chirp := range allChirps {
-		chirpResponses = append(chirpResponses, toChirpResponse(chirp))
-	}
-	respondWithJSON(w, http.StatusOK, chirpResponses)
 }
 
 func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, r *http.Request) {
